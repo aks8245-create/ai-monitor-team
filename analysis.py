@@ -190,6 +190,11 @@ _APOS = "(?:&#x27;|\u2019|\u2018|\u02bc|'|`)"  # 곡선·곧은·엔티티 따�
 
 def _hl(text, aliases):
     safe = _html.escape(text or "")
+    # 마크다운 포맷팅 변환: **굵은텍스트** → <strong>굵은텍스트</strong>
+    safe = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', safe)
+    # 마크다운 포맷팅: *이탤릭* → <em>이탤릭</em> (단, **는 이미 처리됨)
+    safe = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', safe)
+    
     for a in aliases:
         a = a.strip()
         if not a:
