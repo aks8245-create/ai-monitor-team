@@ -26,6 +26,7 @@ import os
 import re
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import analysis as A
@@ -187,7 +188,7 @@ def log_to_sheet(ws, entries, today, clinic, run_ts=""):
         for r in prs:
             rows.append([
                 today, clinic, r.get("plat", ""), cat, q,
-                "O" if r.get("exposed") else "X",
+                "ERROR" if r.get("err") else ("O" if r.get("exposed") else "X"),
                 "O" if r.get("site") else "X",
                 "O" if r.get("blog") else "X",
                 "O" if r.get("youtube") else "X",
@@ -277,7 +278,7 @@ def build_row(plat, text, cits, cfg, accurate, gem):
                 site=cl["site"], blog=cl["blog"], youtube=cl["youtube"],
                 youtube_ours=cl["youtube_ours"], rank=rank, total=total,
                 others=others, domains=cl["domains"],
-                excerpt=A.extract_excerpt(text, aliases, 320), err="")
+                excerpt=A.extract_excerpt(text, aliases, 320), answer=text, citations=cits, err="")
 
 
 def run_query(query, cfg, accurate):
@@ -285,6 +286,7 @@ def run_query(query, cfg, accurate):
     rows = []
     for plat, fn, client in [("GPT", q_openai, oai), ("Gemini", q_gemini, gem)]:
         if not client:
+            rows.append(dict(plat=plat, exposed=False, err="API 연결을 확인해 주세요.", excerpt=""))
             continue
         try:
             text, cits = fn(client, query)
@@ -408,7 +410,7 @@ accurate = o2.checkbox("정확 순위 모드 (AI 한 번 더 · 비용↑)")
 if "results" not in st.session_state:
     st.session_state["results"] = []
 
-now = datetime.now()
+now = datetime.now(ZoneInfo("Asia/Seoul"))
 today = now.strftime("%Y-%m-%d")
 run_ts = now.strftime("%Y-%m-%d %H:%M")   # 회차 구분자
 
@@ -486,8 +488,9 @@ if ws is not None:
                 df = df[df["병원"] == cfg["name"]]
             df = df[df["분류"] == "발견형"].copy()
 
+            df = df[df["노출"].isin(["O", "X"])].copy()
             if df.empty:
-                st.info("아직 발견형 기록이 없습니다. 검색을 하면 누적됩니다.")
+                st.info("아직 정상 조회 기록이 없습니다. 검색을 하면 누적됩니다.")
             else:
                 # 회차 = 실행시각(없으면 날짜)
                 df["회차"] = df["실행시각"].where(df["실행시각"].astype(str) != "", df["날짜"])

@@ -10,7 +10,7 @@ import html as _html
 GENERIC_PREFIX = {
     "이", "그", "저", "우리", "동네", "근처", "주변", "가까운", "해당",
     "여러", "다른", "일부", "종합", "지역", "개인", "대학", "각", "좋은",
-    "유명", "추천", "전문", "최고", "신규",
+    "유명", "추천", "전문", "최고", "신규", "일반", "상급",
 }
 CLINIC_SUF = (r'(여성의원|여성병원|산부인과의원|산부인과|성형외과|피부과|'
               r'한의원|치과|안과|병원|의원|클리닉)')
@@ -75,7 +75,7 @@ def mentions_ordered(text, aliases, competitors):
         a = a.strip()
         if not a:
             continue
-        i = ctext.find(_canon(a))
+        i = ctext.lower().find(_canon(a).lower())
         if i >= 0:
             target_pos = i if target_pos is None else min(target_pos, i)
 
@@ -84,7 +84,7 @@ def mentions_ordered(text, aliases, competitors):
         c = c.strip()
         if not c:
             continue
-        i = ctext.find(_canon(c))
+        i = ctext.lower().find(_canon(c).lower())
         if i >= 0:
             others[c] = min(others.get(c, i), i)
 
@@ -133,7 +133,7 @@ def extract_excerpt(text, aliases, maxlen=300):
     for a in aliases:
         a = a.strip()
         if a:
-            j = ctext.find(_canon(a))
+            j = ctext.lower().find(_canon(a).lower())
             if j >= 0:
                 pos = j
                 break
@@ -233,6 +233,8 @@ def _platform_block(r, aliases):
     exposed = r.get("exposed")
     pill = (f'<span style="{_S_ON}">노출</span>' if exposed
             else f'<span style="{_S_OFF}">미노출</span>')
+    if r.get("err"):
+        pill = f'<span style="{_S_OFF}">조회 실패</span>'
     badges = _badges(r)
     rank = _rank_txt(r)
     others = r.get("others") or []
@@ -242,6 +244,8 @@ def _platform_block(r, aliases):
         ans = f'<div style="{_S_ANS};color:#a32d2d">{_html.escape(r["err"])}</div>'
     else:
         ans = f'<div style="{_S_ANS}">{_hl(r.get("excerpt", ""), aliases)}</div>'
+    if r.get("answer"):
+        ans += '<details><summary>답변 원문</summary><pre style="white-space:pre-wrap">' + _html.escape(r["answer"]) + "</pre></details>"
     return (f'<div style="display:flex;gap:10px;margin-top:12px">'
             f'<span style="{_S_PL}">{r["plat"]}</span>'
             f'<div style="flex:1;min-width:0">{pill}{badges}{rank}{ans}{others_html}</div></div>')
@@ -283,10 +287,10 @@ def report_html(rows_by_query, clinic_name, aliases, today, rank_mode_label):
     disc = [t for t in rows_by_query if t[1] == "발견형"]
 
     def rate(plat):
-        rs = [pr for _, _, prs in disc for pr in prs if pr["plat"] == plat]
+        rs = [pr for _, _, prs in disc for pr in prs if pr["plat"] == plat and not pr.get("err")]
         hit = sum(1 for pr in rs if pr.get("exposed"))
         n = len(rs)
-        return hit, n, (round(hit / n * 100) if n else 0)
+        return hit, n, (round(hit / n * 100) if n else "—")
 
     g = rate("GPT")
     m = rate("Gemini")
@@ -366,6 +370,8 @@ def share_of_voice(rows_by_query, aliases):
     slots = 0
     for _q, _cat, prs in rows_by_query:
         for r in prs:
+            if r.get("err"):
+                continue
             slots += 1
             if r.get("exposed"):
                 counts["우리 병원"] = counts.get("우리 병원", 0) + 1
@@ -384,10 +390,10 @@ def insight_line(rows_by_query, aliases):
     """리포트 상단 자동 요약 한 줄 (#5)."""
     def rate(plat):
         rs = [pr for q, c, prs in rows_by_query if c == "발견형"
-              for pr in prs if pr["plat"] == plat]
+              for pr in prs if pr["plat"] == plat and not pr.get("err")]
         hit = sum(1 for pr in rs if pr.get("exposed"))
         n = len(rs)
-        return (round(hit / n * 100) if n else 0), n
+        return (round(hit / n * 100) if n else "—"), n
     gp, gn = rate("GPT")
     mp, mn = rate("Gemini")
     sov, _ = share_of_voice(rows_by_query, aliases)
@@ -425,19 +431,20 @@ def to_csv(rows_by_query, today):
     w = csv.writer(buf)
     w.writerow(["검색일자", "플랫폼", "분류", "쿼리", "노출", "사이트인용",
                 "블로그인용", "유튜브인용", "유튜브우리채널", "순위", "총병원수",
-                "함께언급", "발췌", "비고"])
+                "함께언급", "발췌", "비고", "답변원문", "출처URL"])
     for q, cat, prs in rows_by_query:
         for r in prs:
             w.writerow([
                 today, r.get("plat", ""), cat, q,
-                "O" if r.get("exposed") else "X",
+                "ERROR" if r.get("err") else ("O" if r.get("exposed") else "X"),
                 "O" if r.get("site") else "X",
                 "O" if r.get("blog") else "X",
                 "O" if r.get("youtube") else "X",
                 "O" if r.get("youtube_ours") else "X",
                 r.get("rank") or "", r.get("total") or "",
                 " | ".join(r.get("others") or []),
-                r.get("excerpt", ""), r.get("err", ""),
+                r.get("excerpt", ""), r.get("err", ""), r.get("answer", ""),
+                " | ".join(c.get("url", "") for c in r.get("citations", [])),
             ])
     return buf.getvalue()
 
@@ -471,10 +478,10 @@ def summary_html(rows_by_query, aliases):
     disc = [t for t in rows_by_query if t[1] == "발견형"]
 
     def rate(plat):
-        rs = [pr for _, _, prs in disc for pr in prs if pr["plat"] == plat]
+        rs = [pr for _, _, prs in disc for pr in prs if pr["plat"] == plat and not pr.get("err")]
         hit = sum(1 for pr in rs if pr.get("exposed"))
         n = len(rs)
-        return hit, n, (round(hit / n * 100) if n else 0)
+        return hit, n, (round(hit / n * 100) if n else "—")
 
     g, m = rate("GPT"), rate("Gemini")
     sov, _slots = share_of_voice(rows_by_query, aliases)
@@ -509,7 +516,10 @@ def summary_html(rows_by_query, aliases):
     scard = ('background:linear-gradient(180deg,#fafaf8,#f3f3f0);border:1px solid #ececec;'
              'border-radius:12px;padding:16px 18px')
     sec = 'font-size:13px;font-weight:700;color:#2c2c2a;margin:16px 0 8px'
+    failed = sum(bool(r.get("err")) for _, _, prs in disc for r in prs)
     insight = _html.escape(insight_line(rows_by_query, aliases))
+    if failed:
+        insight += f" · 조회 실패 {failed}건 (노출률 집계 제외)"
     banner = (f'<div style="background:#0f6e56;color:#fff;border-radius:10px;'
               f'padding:11px 16px;font-size:13.5px;font-weight:600;margin-bottom:16px">'
               f'📊 {insight}</div>')
