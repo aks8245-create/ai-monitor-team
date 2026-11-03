@@ -12,7 +12,7 @@ GPT(웹검색) + Gemini(grounding)에 질문을 던져, 설정한 병원이 어�
   2) share.streamlit.io 에서 배포
   3) 앱 Settings → Secrets 에 입력:
         OPENAI_API_KEY = "sk-..."
-        GEMINI_FREE_API_KEY = "무료 등급 프로젝트에서 만든 키"
+        GEMINI_API_KEY = "기존 결제 프로젝트의 키"
         APP_PASSWORD   = "비밀번호"
      (구글시트 추이 기능을 쓸 때만 추가)
         SHEET_ID = "구글시트 문서 ID"
@@ -32,7 +32,7 @@ import streamlit as st
 import analysis as A
 
 OPENAI_MODEL = "gpt-5.5"
-GEMINI_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-3.6-flash"
 
 PRESETS = {
     "(병원 정보를 직접 입력)": dict(
@@ -89,12 +89,12 @@ def get_openai():
 def get_gemini():
     try:
         from google import genai
-        # 별도의 무료 프로젝트 키만 사용. 기존 유료 키로 자동 대체하지 않는다.
-        key = sec("GEMINI_FREE_API_KEY") or os.getenv("GEMINI_FREE_API_KEY")
+        # 사용자가 충전한 기존 결제 프로젝트의 키를 사용한다.
+        key = sec("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
         if key:
             key = str(key).strip()
             if not key.isascii():
-                raise ValueError("무료 API 키 값의 형식을 확인해 주세요.")
+                raise ValueError("Gemini API 키 값의 형식을 확인해 주세요.")
             return genai.Client(api_key=key)
     except Exception as e:
         st.warning(f"Gemini 초기화 실패: {e}")
@@ -297,7 +297,7 @@ def run_query(query, cfg, accurate):
         providers.insert(0, ("GPT", q_openai, oai))
     for plat, fn, client in providers:
         if not client:
-            rows.append(dict(plat=plat, model=GEMINI_MODEL if plat == "Gemini" else OPENAI_MODEL, exposed=False, err="무료 프로젝트의 GEMINI_FREE_API_KEY를 연결해 주세요." if plat == "Gemini" else "API 연결을 확인해 주세요.", excerpt=""))
+            rows.append(dict(plat=plat, model=GEMINI_MODEL if plat == "Gemini" else OPENAI_MODEL, exposed=False, err="Gemini API 키와 결제 잔액을 확인해 주세요." if plat == "Gemini" else "API 연결을 확인해 주세요.", excerpt=""))
             continue
         try:
             text, cits = fn(client, query)
@@ -313,8 +313,8 @@ def run_query(query, cfg, accurate):
 DEFAULT_QUERIES = ""   # 직원 배포용: 질문 세트 비움 (각자 작성)
 
 st.sidebar.header("병원 설정")
-include_gpt = st.sidebar.checkbox("GPT도 함께 검색 (기존 유료 API)", value=False)
-st.sidebar.caption("Gemini 2.5 Flash-Lite · 무료 프로젝트 키 전용 · 한도 초과 시 중단")
+include_gpt = st.sidebar.checkbox("GPT도 함께 검색 (기존 유료 API)", value=True)
+st.sidebar.caption("Gemini 3.6 Flash · Google 검색 기반 · API 사용량에 따라 과금")
 preset = st.sidebar.selectbox("프리셋", list(PRESETS.keys()))
 p = PRESETS[preset]
 
