@@ -86,13 +86,15 @@ def get_openai():
     return None
 
 
-@st.cache_resource
 def get_gemini():
     try:
         from google import genai
         # 별도의 무료 프로젝트 키만 사용. 기존 유료 키로 자동 대체하지 않는다.
         key = sec("GEMINI_FREE_API_KEY") or os.getenv("GEMINI_FREE_API_KEY")
         if key:
+            key = str(key).strip()
+            if not key.isascii():
+                raise ValueError("무료 API 키 값의 형식을 확인해 주세요.")
             return genai.Client(api_key=key)
     except Exception as e:
         st.warning(f"Gemini 초기화 실패: {e}")
@@ -295,13 +297,13 @@ def run_query(query, cfg, accurate):
         providers.insert(0, ("GPT", q_openai, oai))
     for plat, fn, client in providers:
         if not client:
-            rows.append(dict(plat=plat, exposed=False, err="무료 프로젝트의 GEMINI_FREE_API_KEY를 연결해 주세요." if plat == "Gemini" else "API 연결을 확인해 주세요.", excerpt=""))
+            rows.append(dict(plat=plat, model=GEMINI_MODEL if plat == "Gemini" else OPENAI_MODEL, exposed=False, err="무료 프로젝트의 GEMINI_FREE_API_KEY를 연결해 주세요." if plat == "Gemini" else "API 연결을 확인해 주세요.", excerpt=""))
             continue
         try:
             text, cits = fn(client, query)
             rows.append(build_row(plat, text, cits, cfg, accurate, gem))
         except Exception as e:
-            rows.append(dict(plat=plat, exposed=False, site=False, blog=False,
+            rows.append(dict(plat=plat, model=GEMINI_MODEL if plat == "Gemini" else OPENAI_MODEL, exposed=False, site=False, blog=False,
                              youtube=False, youtube_ours=False, rank=None, total=0,
                              others=[], domains=[], excerpt="", err=f"ERROR: {e}"))
     return rows
