@@ -123,6 +123,38 @@ def rank_from_names(ordered_names, aliases):
     return None, len(ordered_names), others
 
 
+def validate_order(names, answer):
+    """원문에 존재하는 이름만 인정하고 첫 언급 순서로 정렬한다."""
+    if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+        return None
+    normalized = norm(answer)
+    found = {}
+    for name in names:
+        key = norm(name)
+        if not key or key not in normalized:
+            return None
+        found.setdefault(key, name.strip())
+    return sorted(found.values(), key=lambda name: normalized.index(norm(name)))
+
+
+def comparison_table_html(entries):
+    headers = ["질문", "AI / 모델", "언급", "언급 순위", "인용 출처"]
+    rows = []
+    for query, category, results in entries:
+        if category != "발견형":
+            continue
+        for r in results:
+            failed = bool(r.get("err"))
+            status = "조회 실패" if failed else ("언급" if r.get("exposed") else "미언급")
+            rank = "—" if failed or not r.get("exposed") else (str(r["rank"]) + "번째" if r.get("rank") else "확인 필요")
+            sources = ", ".join(dict.fromkeys(r.get("domains") or [])) or "—"
+            vals = [query, r.get("plat", "") + " / " + r.get("model", "기존 기록"), status, rank, sources]
+            rows.append("<tr>" + "".join('<td style="padding:10px;border-bottom:1px solid #ddd">' + _html.escape(v) + "</td>" for v in vals) + "</tr>")
+    return ('<table style="width:100%;border-collapse:collapse;font-size:13px;text-align:left">'
+            '<thead><tr style="background:#0f6e56;color:white">' + "".join('<th style="padding:10px">' + h + "</th>" for h in headers)
+            + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>")
+
+
 def extract_excerpt(text, aliases, maxlen=300):
     """대상 병원이 언급된 문장 발췌. 없으면 도입부."""
     text = (text or "").replace("\n", " ").strip()
@@ -320,6 +352,7 @@ h2{{font-size:15px;font-weight:600;margin:24px 0 8px}}
 <div class="date">{_html.escape(str(clinic_name))} · 검색일 {today}</div>
 <div class="mode">순위 방식: {rank_mode_label}</div>
 {summary_html(rows_by_query, aliases)}
+{comparison_table_html(rows_by_query)}
 <h2>발견형 쿼리</h2>
 {section("발견형")}
 <h2>대조군 쿼리</h2>
@@ -431,7 +464,7 @@ def to_csv(rows_by_query, today):
     w = csv.writer(buf)
     w.writerow(["검색일자", "플랫폼", "분류", "쿼리", "노출", "사이트인용",
                 "블로그인용", "유튜브인용", "유튜브우리채널", "순위", "총병원수",
-                "함께언급", "발췌", "비고", "답변원문", "출처URL"])
+                "함께언급", "발췌", "비고", "답변원문", "출처URL", "모델", "순위분석방식"])
     for q, cat, prs in rows_by_query:
         for r in prs:
             w.writerow([
@@ -445,6 +478,7 @@ def to_csv(rows_by_query, today):
                 " | ".join(r.get("others") or []),
                 r.get("excerpt", ""), r.get("err", ""), r.get("answer", ""),
                 " | ".join(c.get("url", "") for c in r.get("citations", [])),
+                r.get("model", ""), r.get("rank_method", ""),
             ])
     return buf.getvalue()
 
@@ -523,15 +557,17 @@ def summary_html(rows_by_query, aliases):
     banner = (f'<div style="background:#0f6e56;color:#fff;border-radius:10px;'
               f'padding:11px 16px;font-size:13.5px;font-weight:600;margin-bottom:16px">'
               f'📊 {insight}</div>')
+    platforms = list(dict.fromkeys(r["plat"] for _, _, prs in disc for r in prs))
+    cards = ""
+    for platform in platforms:
+        hit, count, percent = rate(platform)
+        value = f"{hit} / {count} · {percent}%" if count else "정상 조회 없음"
+        cards += (f'<div style="{scard}"><div style="font-size:12px;color:#6b6a66">'
+                  f'{_html.escape(platform)} 발견형 노출</div>'
+                  f'<div style="font-size:26px;font-weight:700">{value}</div></div>')
     return (
-        f'<div style="max-width:840px;font-family:Pretendard,-apple-system,\'Malgun Gothic\',sans-serif">'
+        f'<div style="max-width:840px;font-family:Pretendard,-apple-system,Malgun Gothic,sans-serif">'
         f'{banner}'
-        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px">'
-        f'<div style="{scard}"><div style="font-size:12px;color:#6b6a66;margin-bottom:6px">GPT 발견형 노출</div>'
-        f'<div style="font-size:26px;font-weight:700;color:#2c2c2a">{g[0]}'
-        f'<small style="font-size:14px;color:#9b9a94;font-weight:400"> / {g[1]} · {g[2]}%</small></div></div>'
-        f'<div style="{scard}"><div style="font-size:12px;color:#6b6a66;margin-bottom:6px">Gemini 발견형 노출</div>'
-        f'<div style="font-size:26px;font-weight:700;color:#2c2c2a">{m[0]}'
-        f'<small style="font-size:14px;color:#9b9a94;font-weight:400"> / {m[1]} · {m[2]}%</small></div></div></div>'
+        f'<div style="display:grid;grid-template-columns:repeat({max(1,len(platforms))},1fr);gap:12px;margin-bottom:18px">{cards}</div>'
         f'<div style="{sec}">노출 점유율 (등장 횟수)</div>{bars}'
         f'<div style="{sec}">AI가 자주 인용한 출처</div><div>{chips}</div></div>')

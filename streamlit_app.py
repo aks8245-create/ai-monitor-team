@@ -12,7 +12,7 @@ GPT(웹검색) + Gemini(grounding)에 질문을 던져, 설정한 병원이 어�
   2) share.streamlit.io 에서 배포
   3) 앱 Settings → Secrets 에 입력:
         OPENAI_API_KEY = "sk-..."
-        GEMINI_API_KEY = "..."
+        GEMINI_FREE_API_KEY = "무료 등급 프로젝트에서 만든 키"
         APP_PASSWORD   = "비밀번호"
      (구글시트 추이 기능을 쓸 때만 추가)
         SHEET_ID = "구글시트 문서 ID"
@@ -32,7 +32,7 @@ import streamlit as st
 import analysis as A
 
 OPENAI_MODEL = "gpt-5.5"
-GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 PRESETS = {
     "(병원 정보를 직접 입력)": dict(
@@ -90,7 +90,8 @@ def get_openai():
 def get_gemini():
     try:
         from google import genai
-        key = sec("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+        # 별도의 무료 프로젝트 키만 사용. 기존 유료 키로 자동 대체하지 않는다.
+        key = sec("GEMINI_FREE_API_KEY") or os.getenv("GEMINI_FREE_API_KEY")
         if key:
             return genai.Client(api_key=key)
     except Exception as e:
@@ -101,7 +102,7 @@ def get_gemini():
 # ── 구글시트 (선택) ────────────────────────────────────────
 SHEET_HEADER = ["날짜", "병원", "플랫폼", "분류", "쿼리", "노출", "사이트",
                 "블로그", "유튜브", "유튜브우리", "순위", "총병원", "함께언급",
-                "출처도메인", "실행시각"]
+                "출처도메인", "실행시각", "모델"]
 
 
 @st.cache_resource
@@ -197,6 +198,7 @@ def log_to_sheet(ws, entries, today, clinic, run_ts=""):
                 " | ".join(r.get("others") or []),
                 " | ".join(sorted(set(r.get("domains") or []))),
                 run_ts,
+                r.get("model", ""),
             ])
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
@@ -247,6 +249,8 @@ def q_gemini(client, query):
             t = getattr(web, "title", None)
             if u:
                 cits.append({"url": u, "title": t or ""})
+    if not text.strip() or not cits:
+        raise ValueError("검색 출처가 확인되지 않아 노출 집계에서 제외했습니다.")
     return text, cits
 
 
@@ -258,7 +262,7 @@ def extract_order_llm(gem, answer_text):
         resp = gem.models.generate_content(model=GEMINI_MODEL, contents=prompt)
         raw = (getattr(resp, "text", "") or "").strip().replace("```json", "").replace("```", "").strip()
         arr = json.loads(raw)
-        return [str(x) for x in arr] if isinstance(arr, list) else None
+        return A.validate_order(arr, answer_text)
     except Exception:
         return None
 
@@ -271,22 +275,27 @@ def build_row(plat, text, cits, cfg, accurate, gem):
         if ordered is not None:
             rank, total, others = A.rank_from_names(ordered, aliases)
         else:
-            rank, total, others = A.rank_free(text, aliases, cfg["competitors"])
+            rank, total, others = None, 0, []
     else:
         rank, total, others = A.rank_free(text, aliases, cfg["competitors"])
     return dict(plat=plat, exposed=A.name_mentioned(text, aliases),
                 site=cl["site"], blog=cl["blog"], youtube=cl["youtube"],
                 youtube_ours=cl["youtube_ours"], rank=rank, total=total,
                 others=others, domains=cl["domains"],
-                excerpt=A.extract_excerpt(text, aliases, 320), answer=text, citations=cits, err="")
+                excerpt=A.extract_excerpt(text, aliases, 320), answer=text, citations=cits,
+                model=GEMINI_MODEL if plat == "Gemini" else OPENAI_MODEL,
+                rank_method="AI 병원명 추출" if accurate else "문자열 추정", err="")
 
 
 def run_query(query, cfg, accurate):
-    oai, gem = get_openai(), get_gemini()
+    oai, gem = (get_openai() if include_gpt else None), get_gemini()
     rows = []
-    for plat, fn, client in [("GPT", q_openai, oai), ("Gemini", q_gemini, gem)]:
+    providers = [("Gemini", q_gemini, gem)]
+    if include_gpt:
+        providers.insert(0, ("GPT", q_openai, oai))
+    for plat, fn, client in providers:
         if not client:
-            rows.append(dict(plat=plat, exposed=False, err="API 연결을 확인해 주세요.", excerpt=""))
+            rows.append(dict(plat=plat, exposed=False, err="무료 프로젝트의 GEMINI_FREE_API_KEY를 연결해 주세요." if plat == "Gemini" else "API 연결을 확인해 주세요.", excerpt=""))
             continue
         try:
             text, cits = fn(client, query)
@@ -302,6 +311,8 @@ def run_query(query, cfg, accurate):
 DEFAULT_QUERIES = ""   # 직원 배포용: 질문 세트 비움 (각자 작성)
 
 st.sidebar.header("병원 설정")
+include_gpt = st.sidebar.checkbox("GPT도 함께 검색 (기존 유료 API)", value=False)
+st.sidebar.caption("Gemini 2.5 Flash-Lite · 무료 프로젝트 키 전용 · 한도 초과 시 중단")
 preset = st.sidebar.selectbox("프리셋", list(PRESETS.keys()))
 p = PRESETS[preset]
 
@@ -405,7 +416,7 @@ query = c1.text_input("질문", placeholder="예: 여의도 산부인과 추천"
 go = c2.button("검색", type="primary", use_container_width=True)
 o1, o2 = st.columns(2)
 is_control = o1.checkbox("병원명 직접 질의(대조군)")
-accurate = o2.checkbox("정확 순위 모드 (AI 한 번 더 · 비용↑)")
+accurate = o2.checkbox("언급 순위 자동 분석 (추가 1회 조회)", value=True)
 
 if "results" not in st.session_state:
     st.session_state["results"] = []
@@ -429,6 +440,7 @@ results = st.session_state["results"]
 # 요약 패널 (예쁜 화면)
 if results:
     st.markdown(A.summary_html(results, cfg["aliases"]), unsafe_allow_html=True)
+    st.markdown(A.comparison_table_html(results), unsafe_allow_html=True)
     st.divider()
 
 # 개별 카드
@@ -437,7 +449,7 @@ for q, cat, rows in results:
 
 # 다운로드 / 비우기
 if results:
-    mode = "AI 순위(정확)" if accurate else "등장 순서(무료)"
+    mode = "결과별 분석 방식 및 모델은 데이터 파일에 기록"
     html = A.report_html(list(results), cfg["name"], cfg["aliases"], today, mode)
     csv = A.to_csv(list(results), today)
     d1, d2, d3 = st.columns(3)
@@ -504,7 +516,8 @@ if ws is not None:
                 else:
                     df["ym"] = df["날짜"].astype(str).str[:7]
                     df["hit"] = (df["노출"] == "O").astype(int)
-                    piv = (df.groupby(["ym", "플랫폼"])["hit"].mean()
+                    df["AI"] = df["플랫폼"] + " / " + df["모델"].replace("", "기존 기록")
+                    piv = (df.groupby(["ym", "AI"])["hit"].mean()
                            .mul(100).round(0).unstack())
                     # X축을 "6월/7월"로 표시
                     piv.index = [f"{int(m[5:7])}월" if len(m) >= 7 else m for m in piv.index]
